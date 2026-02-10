@@ -1,20 +1,21 @@
 import os
+import re
 import zipfile
+from typing import List, Tuple
+
 import numpy as np
-import pandas as pd
 from huggingface_hub import snapshot_download
 from scipy.optimize import linear_sum_assignment
-from ..smp import get_logger, get_cache_path, LMUDataRoot, load, dump
+
+from ..smp import LMUDataRoot, dump, get_cache_path, load
 from .video_base import VideoBaseDataset
-from typing import List, Tuple
-import re
 
 
 def parse_time_to_seconds(time_str: str) -> float:
-    """Convert the time string into seconds, supported formats: seconds, minutes:seconds, hours:minutes:seconds"""
+    """Convert the time string into seconds"""
     time_str = time_str.strip()
-    parts = time_str.split(':')
-    
+    parts = time_str.split(":")
+
     if len(parts) == 1:
         return float(parts[0])
     elif len(parts) == 2:
@@ -26,13 +27,14 @@ def parse_time_to_seconds(time_str: str) -> float:
     else:
         raise ValueError(f"Invalid time format: {time_str}")
 
+
 def parse_time_intervals(text: str, strict: bool = False) -> List[List[float]]:
     """
     Parse all time intervals in the text and support multiple formats.
     Return: [[start, end], [start, end], ...] List of formats
     """
     intervals: List[List[float]] = []
-    
+
     def add_interval(start_str: str, end_str: str, converter) -> None:
         try:
             start = converter(start_str.strip())
@@ -41,6 +43,7 @@ def parse_time_intervals(text: str, strict: bool = False) -> List[List[float]]:
                 intervals.append([start, end])
         except (ValueError, TypeError):
             pass
+
     # 1: <time> 标签
     pattern_time_tag = r"<time>(\S+?)\s*-\s*(\S+?)\s*seconds?</time>"
     for s, e in re.findall(pattern_time_tag, text, re.IGNORECASE):
@@ -59,13 +62,22 @@ def parse_time_intervals(text: str, strict: bool = False) -> List[List[float]]:
 
     # 3: Other formats
     patterns = [
-        (r"starts\s+at\s+(\S+?)(?:\s+seconds?)?\s+and\s+ends\s+at\s+(\S+?)(?:\s+seconds?)?", parse_time_to_seconds),
-        (r"start\s+is\s+at\s+(\S+?)(?:\s+seconds?)?\s+and\s+(?:the\s+)?end\s+is\s+at\s+(\S+?)(?:\s+seconds?)?", parse_time_to_seconds),
+        (
+            r"starts\s+at\s+(\S+?)(?:\s+seconds?)?\s+and\s+ends\s+at\s+(\S+?)(?:\s+seconds?)?",
+            parse_time_to_seconds,
+        ),
+        (
+            r"start\s+is\s+at\s+(\S+?)(?:\s+seconds?)?\s+and\s+(?:the\s+)?end\s+is\s+at\s+(\S+?)(?:\s+seconds?)?",
+            parse_time_to_seconds,
+        ),
         (r"(\d+(?:\.\d+)?)\s+to\s+(\d+(?:\.\d+)?)", float),
-        (r"(?<!\d)(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)(?!\s*(?:seconds?|</time>))", float),
+        (
+            r"(?<!\d)(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)(?!\s*(?:seconds?|</time>))",
+            float,
+        ),
         (r"\[\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*\]", float),
     ]
-    
+
     for pattern, converter in patterns:
         for s, e in re.findall(pattern, text, re.IGNORECASE):
             add_interval(s, e, converter)
@@ -108,7 +120,9 @@ def calculate_total_length(segments):
 
 
 def compute_one_to_many_metrics(
-    pred_segments: List[Tuple[float, float]], gt_segments:List[Tuple[float, float]], iou_thresholds=[0.3, 0.5, 0.7],
+    pred_segments: List[Tuple[float, float]],
+    gt_segments: List[Tuple[float, float]],
+    iou_thresholds=[0.3, 0.5, 0.7],
 ):
     """
     Compute one-to-many matching metrics between predicted and ground truth segments.
@@ -118,7 +132,11 @@ def compute_one_to_many_metrics(
         iou_thresholds: List[float]
 
     Returns:
-        dict: {"EtF1": float, "C-Acc": float, "tIoU": float, "tP@th": float, "tR@th": float, "tF1@th": float for each th in iou_thresholds}
+        dict: {
+            "EtF1": float, "C-Acc": float, "tIoU": float,
+            "tP@th": float, "tR@th": float,
+            "tF1@th": float for each th in iou_thresholds
+        }
     """
     c_acc = 1.0 if len(pred_segments) == len(gt_segments) else 0.0
     merged_pred = merge_segments(pred_segments)
@@ -167,44 +185,44 @@ def compute_one_to_many_metrics(
             else 0.0
         )
         results.update({f"tP@{th}": precision, f"tR@{th}": recall, f"tF1@{th}": f1})
-    EtF1 = c_acc * np.mean(
-        [results[f"tF1@{th}"] for th in iou_thresholds]
-    )
+    EtF1 = c_acc * np.mean([results[f"tF1@{th}"] for th in iou_thresholds])
     results["EtF1"] = EtF1
     return results
 
 
 class OMTGBench(VideoBaseDataset):
-    TYPE = 'Video-Temporal-Grounding'
-    HF_REPO_ID = 'insomnia7/omtg_bench' 
-    
-    def __init__(self, dataset='OMTGBench', nframe=0, fps=2.0):
+    TYPE = "Video-Temporal-Grounding"
+    HF_REPO_ID = "insomnia7/omtg_bench"
+
+    def __init__(self, dataset="OMTGBench", nframe=0, fps=2.0):
         super().__init__(dataset=dataset, nframe=nframe, fps=fps)
-    
+
     @classmethod
     def supported_datasets(cls):
-        return ['OMTGBench']
+        return ["OMTGBench"]
 
-    def prepare_dataset(self, dataset_name='OMTGBench'):
+    def prepare_dataset(self, dataset_name="OMTGBench"):
         cache_path = get_cache_path(self.HF_REPO_ID)
         if cache_path is None:
-            cache_path = os.path.join(LMUDataRoot(), 'OMTGBench')
-        data_file = os.path.join(cache_path, f'{dataset_name}.tsv')
-        video_root = os.path.join(cache_path, 'videos')
+            cache_path = os.path.join(LMUDataRoot(), "OMTGBench")
+        data_file = os.path.join(cache_path, f"{dataset_name}.tsv")
+        video_root = os.path.join(cache_path, "videos")
         if not os.path.exists(data_file) or not os.path.exists(video_root):
             print(f"Downloading {dataset_name} from Hugging Face: {self.HF_REPO_ID}...")
             try:
-                snapshot_download(repo_id=self.HF_REPO_ID, repo_type='dataset', local_dir=cache_path)
+                snapshot_download(
+                    repo_id=self.HF_REPO_ID, repo_type="dataset", local_dir=cache_path
+                )
             except Exception as e:
                 print(f"Download failed: {e}")
                 raise e
 
-            zip_path = os.path.join(cache_path, 'videos.zip')
+            zip_path = os.path.join(cache_path, "videos.zip")
             if os.path.exists(zip_path) and not os.path.exists(video_root):
                 print(f"Extracting videos to {video_root}...")
-                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                with zipfile.ZipFile(zip_path, "r") as zip_ref:
                     zip_ref.extractall(cache_path)
-        
+
         return dict(root=video_root, data_file=data_file)
 
     def build_prompt(self, line, video_llm):
@@ -212,35 +230,36 @@ class OMTGBench(VideoBaseDataset):
             line = self.data.iloc[line]
         message = []
         if video_llm:
-            vid_path = os.path.join(self.data_root, line['video'])
-            message.append(dict(type='video', value=vid_path))
+            vid_path = os.path.join(self.data_root, line["video"])
+            message.append(dict(type="video", value=vid_path))
         else:
-            frames = self.save_video_frames(line['video'])
+            frames = self.save_video_frames(line["video"])
             for im in frames:
-                message.append(dict(type='image', value=im))
-        message.append(dict(type='text', value=line['question']))
+                message.append(dict(type="image", value=im))
+        message.append(dict(type="text", value=line["question"]))
         return message
-    
-    
+
     def evaluate(self, eval_file, **judge_kwargs):
         data = load(eval_file)
         metrics = {
-            'tIoU': [],
-            'C-Acc': [],
-            'EtF1': [],
+            "tIoU": [],
+            "C-Acc": [],
+            "EtF1": [],
         }
         iou_thresholds = [0.3, 0.5, 0.7]
         for th in iou_thresholds:
-            metrics[f'tF1@{th}'] = []
-            metrics[f'tP@{th}'] = []
-            metrics[f'tR@{th}'] = []
-            
+            metrics[f"tF1@{th}"] = []
+            metrics[f"tP@{th}"] = []
+            metrics[f"tR@{th}"] = []
+
         for i, row in data.iterrows():
-            pred_text = str(row['prediction'])
-            gt_text = str(row['answer'])
+            pred_text = str(row["prediction"])
+            gt_text = str(row["answer"])
             pred_segs = parse_time_intervals(pred_text)
             gt_segs = parse_time_intervals(gt_text)
-            print(f"Sample {i}: Predicted Segments: {pred_segs}, Ground Truth Segments: {gt_segs}")
+            print(
+                f"Sample {i}: Predicted Segments: {pred_segs}, Ground Truth Segments: {gt_segs}"
+            )
             one_to_many_metrics = compute_one_to_many_metrics(
                 pred_segs, gt_segs, iou_thresholds=iou_thresholds
             )
@@ -249,9 +268,9 @@ class OMTGBench(VideoBaseDataset):
 
         results = {}
         for k, v in metrics.items():
-            results[k] = np.mean(v) * 100 # to percentage
+            results[k] = np.mean(v) * 100  # to percentage
         print(f"Evaluation Results for {self.dataset_name}:")
         print(results)
-        score_file = eval_file.replace('.xlsx', '_score.json')
+        score_file = eval_file.replace(".xlsx", "_score.json")
         dump(results, score_file)
         return results

@@ -61,6 +61,7 @@ from .visfactor import VisFactor
 from .ost_bench import OSTDataset
 from .videommmu import VideoMMMU
 from .vsibench import VSIBench
+from .omtgbench import OMTGBench
 from .mmsi_video import MMSIVideoBench
 
 from .EgoExoBench.egoexobench import EgoExoBench_MCQ
@@ -102,7 +103,7 @@ from .gsm8k_v import GSM8KVDataset
 from .macbench import MaCBench
 from .sarena_mini import SArena_MINI
 from .uni_svg import UniSVG
-from .omtgbench import OMTGBench
+
 
 class ConcatDataset(ImageBaseDataset):
     # This dataset takes multiple dataset names as input and aggregate them into a single dataset.
